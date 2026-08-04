@@ -26,7 +26,17 @@ class ChannelMemory:
             )
             """
         )
-
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                fact TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(channel_id, fact)
+            )
+            """
+        )
         self.connection.commit()
 
     def add_message(
@@ -97,6 +107,71 @@ class ChannelMemory:
         self.connection.execute(
             """
             DELETE FROM messages
+            WHERE channel_id = ?
+            """,
+            (str(channel_id),),
+        )
+
+        self.connection.commit()
+    def add_fact(
+        self,
+        channel_id: int,
+        fact: str,
+    ) -> None:
+        fact = fact.strip()
+
+        if not fact:
+            return
+
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO project_facts (
+                channel_id,
+                fact
+            )
+            VALUES (?, ?)
+            """,
+            (
+                str(channel_id),
+                fact,
+            ),
+        )
+
+        self.connection.commit()
+
+
+    def get_facts(
+        self,
+        channel_id: int,
+        limit: int = 50,
+    ) -> list[str]:
+        cursor = self.connection.execute(
+            """
+            SELECT fact
+            FROM project_facts
+            WHERE channel_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (
+                str(channel_id),
+                limit,
+            ),
+        )
+
+        return [
+            row["fact"]
+            for row in cursor.fetchall()
+        ]
+
+
+    def clear_facts(
+        self,
+        channel_id: int,
+    ) -> None:
+        self.connection.execute(
+            """
+            DELETE FROM project_facts
             WHERE channel_id = ?
             """,
             (str(channel_id),),

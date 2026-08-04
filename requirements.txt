@@ -14,6 +14,7 @@ chromadb==1.5.9
 click==8.4.2
 discord.py==2.7.1
 durationpy==0.10
+et_xmlfile==2.0.0
 filelock==3.32.0
 flatbuffers==25.12.19
 frozenlist==1.8.0
@@ -31,6 +32,7 @@ importlib_resources==7.1.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kubernetes==36.0.3
+lxml==6.1.1
 markdown-it-py==4.2.0
 mdurl==0.1.2
 mmh3==5.2.1
@@ -38,6 +40,7 @@ multidict==6.7.1
 numpy==2.5.1
 oauthlib==3.3.1
 onnxruntime==1.27.0
+openpyxl==3.1.5
 opentelemetry-api==1.44.0
 opentelemetry-exporter-otlp-proto-common==1.44.0
 opentelemetry-exporter-otlp-proto-grpc==1.44.0
@@ -47,6 +50,7 @@ opentelemetry-semantic-conventions==0.65b0
 orjson==3.11.9
 overrides==7.7.0
 packaging==26.2
+pillow==12.3.0
 propcache==0.5.2
 protobuf==7.35.1
 pybase64==1.4.3
@@ -58,7 +62,9 @@ pypdf==6.14.2
 PyPika==0.51.1
 pyproject_hooks==1.2.0
 python-dateutil==2.9.0.post0
+python-docx==1.2.0
 python-dotenv==1.2.2
+python-pptx==1.0.2
 PyYAML==6.0.3
 referencing==0.37.0
 requests==2.34.2
@@ -79,4 +85,5 @@ uvloop==0.22.1
 watchfiles==1.2.0
 websocket-client==1.9.0
 websockets==16.1.1
+xlsxwriter==3.2.9
 yarl==1.24.5

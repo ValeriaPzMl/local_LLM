@@ -216,30 +216,7 @@ class RAGService:
                 }
             )
 
-        return matches
-    async def build_context(
-        self,
-        channel_id: int,
-        query: str,
-        limit: int = 5,
-    ) -> str:
-
-        results = await self.search(
-            channel_id,
-            query,
-            limit,
-        )
-
-        if not results:
-            return ""
-
-        context = []
-
-        for result in results:
-            context.append(result["text"])
-
-        return "\n\n".join(context)
-
+        return matches 
     def delete_document(
         self,
         channel_id: int,
@@ -252,6 +229,65 @@ class RAGService:
                 "document_id": document_id,
             }
         )
+    async def build_context(
+        self,
+        channel_id: int,
+        query: str,
+        limit: int = 5,
+    ) -> tuple[str, list[dict]]:
+        results = await self.search(
+            channel_id=channel_id,
+            query=query,
+            limit=limit,
+        )
+
+        if not results:
+            return "", []
+
+        context_blocks = []
+        sources = []
+        seen_sources = set()
+
+        for position, result in enumerate(results, start=1):
+            metadata = result.get("metadata") or {}
+
+            source = metadata.get(
+                "source",
+                "Documento desconocido",
+            )
+
+            chunk_index = int(
+                metadata.get("chunk_index", 0)
+            )
+
+            context_blocks.append(
+                f"[Fuente {position}: {source}, "
+                f"fragmento {chunk_index + 1}]\n"
+                f"{result['text']}"
+            )
+
+            source_key = (
+                source,
+                chunk_index,
+            )
+
+            if source_key not in seen_sources:
+                seen_sources.add(source_key)
+
+                sources.append(
+                    {
+                        "number": position,
+                        "source": source,
+                        "chunk_index": chunk_index,
+                        "distance": result.get("distance"),
+                    }
+                )
+
+        context = "\n\n---\n\n".join(context_blocks)
+
+        return context, sources
+
+
     async def answer_question(
         self,
         channel_id: int,
@@ -259,32 +295,38 @@ class RAGService:
         ollama_client,
         limit: int = 5,
     ) -> str:
-        context = await self.build_context(
+        context, sources = await self.build_context(
             channel_id=channel_id,
             query=question,
             limit=limit,
         )
 
         if not context:
-            return "No encontré información relacionada en los documentos."
+            return (
+                "No encontré información relacionada "
+                "en los documentos de este canal."
+            )
 
         system_prompt = """
-    Eres un asistente que responde preguntas usando únicamente
-    la información proporcionada en el contexto.
+    Eres ComputahMind, un asistente que responde usando solamente
+    el contexto recuperado de los documentos.
 
-    Si la respuesta no aparece en el contexto, responde:
-    "No encontré esa información en los documentos."
+    Reglas:
 
-    No inventes datos.
-    Responde de forma clara y directa.
+    1. No inventes información.
+    2. Si el contexto no contiene la respuesta, indícalo claramente.
+    3. Cuando uses información del contexto, cita la fuente con el
+    formato [Fuente 1], [Fuente 2], etc.
+    4. No menciones fuentes que no hayas utilizado.
+    5. Responde en español de forma clara y útil.
     """.strip()
 
         user_prompt = f"""
-    CONTEXTO:
+    CONTEXTO RECUPERADO:
 
     {context}
 
-    PREGUNTA:
+    PREGUNTA DEL USUARIO:
 
     {question}
     """.strip()
@@ -294,7 +336,22 @@ class RAGService:
             prompt=user_prompt,
         )
 
-        return response
+        source_lines = []
+
+        for source in sources:
+            source_lines.append(
+                f"- [Fuente {source['number']}] "
+                f"`{source['source']}` "
+                f"(fragmento {source['chunk_index'] + 1})"
+            )
+
+        sources_text = "\n".join(source_lines)
+
+        return (
+            f"{response.strip()}\n\n"
+            f"📚 **Fragmentos consultados:**\n"
+            f"{sources_text}"
+        )
     def list_documents(
         self,
         channel_id: int,

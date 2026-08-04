@@ -4,6 +4,7 @@ from pathlib import Path
 import discord
 
 from src.config import DISCORD_TOKEN
+from src.loaders import DocumentLoader
 from src.memory import ChannelMemory
 from src.ollama_client import OllamaClient
 from src.rag import RAGService
@@ -13,11 +14,12 @@ SYSTEM_PROMPT = """
 Eres ComputahMind, un asistente para proyectos.
 
 Cada canal de Discord representa un proyecto diferente.
-Debes usar el historial proporcionado para recordar información
-mencionada anteriormente dentro de ese canal.
 
-No inventes recuerdos. Cuando una respuesta dependa del historial,
-revisa los mensajes anteriores antes de responder.
+Debes utilizar el historial reciente y la memoria permanente
+del proyecto para responder.
+
+No inventes recuerdos. Cuando una respuesta dependa de información
+anterior, revisa la memoria y el historial proporcionados.
 
 Responde siempre en español de forma clara y útil.
 """.strip()
@@ -34,7 +36,7 @@ class ComputahMindBot:
         self.rag = RAGService()
 
         # Impide procesar dos solicitudes simultáneamente
-        # dentro del mismo canal.
+        # en el mismo canal.
         self.channel_locks: dict[int, asyncio.Lock] = {}
 
         @self.client.event
@@ -52,25 +54,65 @@ class ComputahMindBot:
             channel_id = message.channel.id
             user_message = message.content.strip()
 
-            # Los comandos solo se procesan cuando hay texto.
+            # Muestra cuántos mensajes hay guardados.
             if user_message.lower() == "!memoria":
                 total = self.memory.count_messages(channel_id)
 
                 await message.channel.send(
-                    f"Este canal tiene {total} mensajes guardados "
-                    "en su memoria."
+                    f"Este canal tiene {total} mensajes "
+                    "guardados en su historial."
                 )
                 return
 
+            # Muestra los hechos permanentes del proyecto.
+            if user_message.lower() == "!hechos":
+                facts = self.memory.get_facts(
+                    channel_id=channel_id,
+                    limit=50,
+                )
+
+                if not facts:
+                    await message.channel.send(
+                        "No hay hechos permanentes guardados "
+                        "en este canal."
+                    )
+                    return
+
+                facts_text = "\n".join(
+                    f"- {fact}"
+                    for fact in facts
+                )
+
+                await self.send_long_message(
+                    channel=message.channel,
+                    text=(
+                        "🧠 **Memoria permanente del proyecto:**\n"
+                        f"{facts_text}"
+                    ),
+                )
+                return
+
+            # Borra solamente el historial de conversación.
             if user_message.lower() == "!olvidar":
                 self.memory.clear_channel(channel_id)
 
                 await message.channel.send(
-                    "He borrado la memoria de este canal."
+                    "He borrado el historial de conversación "
+                    "de este canal."
                 )
                 return
 
-            # Si no hay texto ni archivos adjuntos, no hay nada
+            # Borra solamente los hechos permanentes.
+            if user_message.lower() == "!olvidar-hechos":
+                self.memory.clear_facts(channel_id)
+
+                await message.channel.send(
+                    "He borrado los hechos permanentes "
+                    "de este canal."
+                )
+                return
+
+            # Si no hay texto ni adjuntos, no hay nada
             # que procesar.
             if not user_message and not message.attachments:
                 return
@@ -81,8 +123,8 @@ class ComputahMindBot:
             )
 
             async with lock:
-                # Primero procesamos los documentos adjuntos.
-                # Así una persona puede subir un PDF y hacer una
+                # Primero procesa los documentos.
+                # Así se puede adjuntar un archivo y escribir una
                 # pregunta en el mismo mensaje.
                 if message.attachments:
                     await self.process_attachments(message)
@@ -113,21 +155,27 @@ class ComputahMindBot:
                 attachment.filename
             ).suffix.lower()
 
-            if extension != ".pdf":
+            if extension not in DocumentLoader.SUPPORTED_EXTENSIONS:
+                supported = ", ".join(
+                    sorted(
+                        DocumentLoader.SUPPORTED_EXTENSIONS
+                    )
+                )
+
                 await message.channel.send(
-                    f"⚠️ `{attachment.filename}` no fue procesado. "
-                    "Por ahora solamente acepto archivos PDF."
+                    f"⚠️ `{attachment.filename}` no fue procesado.\n"
+                    f"Formatos compatibles: `{supported}`"
                 )
                 continue
 
-            # Path(...).name evita que un nombre de archivo incluya
-            # rutas peligrosas como ../../archivo.pdf.
+            # Evita nombres que intenten incluir rutas,
+            # por ejemplo ../../archivo.pdf.
             safe_name = Path(
                 attachment.filename
             ).name
 
-            # El ID del archivo de Discord evita colisiones entre
-            # archivos que tengan el mismo nombre.
+            # El ID de Discord evita colisiones cuando dos archivos
+            # tienen el mismo nombre.
             file_path = upload_directory / (
                 f"{attachment.id}_{safe_name}"
             )
@@ -150,8 +198,7 @@ class ComputahMindBot:
                     )
 
                 if result["status"] == "already_exists":
-                    # El contenido ya está en Chroma, por lo que
-                    # no necesitamos conservar otra copia local.
+                    # No necesitamos conservar una copia duplicada.
                     file_path.unlink(missing_ok=True)
 
                     await message.channel.send(
@@ -190,22 +237,69 @@ class ComputahMindBot:
             f"{author_name}: {user_message}"
         )
 
-        # Guardamos primero el mensaje del usuario.
+        # Guarda el mensaje del usuario en el historial.
         self.memory.add_message(
             channel_id=channel_id,
             role="user",
             content=stored_user_message,
         )
 
+        # Intenta extraer información permanente del mensaje.
+        try:
+            extracted_facts = await self.ollama.extract_facts(
+                user_message
+            )
+
+            for fact in extracted_facts:
+                self.memory.add_fact(
+                    channel_id=channel_id,
+                    fact=fact,
+                )
+
+            if extracted_facts:
+                print(
+                    "Hechos guardados: "
+                    f"{extracted_facts}"
+                )
+
+        except Exception as error:
+            # La extracción de hechos no debe impedir que el bot
+            # responda al mensaje.
+            print(
+                "No se pudieron extraer hechos: "
+                f"{type(error).__name__}: {error}"
+            )
+
+        # Recupera el historial reciente.
         history = self.memory.get_messages(
             channel_id=channel_id,
             limit=30,
         )
 
+        # Recupera la memoria permanente.
+        facts = self.memory.get_facts(
+            channel_id=channel_id,
+            limit=50,
+        )
+
+        if facts:
+            facts_text = "\n".join(
+                f"- {fact}"
+                for fact in facts
+            )
+        else:
+            facts_text = (
+                "No hay hechos permanentes guardados."
+            )
+
         messages = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT,
+                "content": (
+                    f"{SYSTEM_PROMPT}\n\n"
+                    "MEMORIA PERMANENTE DEL PROYECTO:\n"
+                    f"{facts_text}"
+                ),
             },
             *history,
         ]
@@ -223,7 +317,7 @@ class ComputahMindBot:
 
                 if documents:
                     print(
-                        f"Usando RAG con "
+                        "Usando RAG con "
                         f"{len(documents)} documento(s)."
                     )
 
@@ -233,13 +327,16 @@ class ComputahMindBot:
                         ollama_client=self.ollama,
                         limit=5,
                     )
+
                 else:
                     print(
                         "No hay documentos indexados. "
                         "Usando conversación normal."
                     )
 
-                    answer = await self.ollama.chat(messages)
+                    answer = await self.ollama.chat(
+                        messages
+                    )
 
         except Exception as error:
             print(
@@ -253,6 +350,7 @@ class ComputahMindBot:
             )
             return
 
+        # Guarda la respuesta del asistente.
         self.memory.add_message(
             channel_id=channel_id,
             role="assistant",

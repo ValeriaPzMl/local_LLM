@@ -127,3 +127,58 @@ class OllamaClient:
             raise RuntimeError(
                 "Ollama tardó demasiado en responder."
             ) from error
+    async def extract_facts(
+        self,
+        user_message: str,
+    ) -> list[str]:
+        system = """
+    Analiza el mensaje del usuario y extrae únicamente hechos
+    importantes y duraderos sobre su proyecto.
+
+    Ejemplos de hechos útiles:
+    - Nombre del proyecto.
+    - Lenguajes o frameworks usados.
+    - Objetivos del proyecto.
+    - Decisiones técnicas.
+    - Preferencias permanentes.
+    - Requisitos importantes.
+
+    No extraigas:
+    - Saludos.
+    - Preguntas.
+    - Comentarios temporales.
+    - Información incierta.
+    - Datos inventados.
+
+    Devuelve únicamente una lista, un hecho por línea.
+    Cada línea debe comenzar con "- ".
+    Si no hay hechos importantes, responde exactamente:
+    NINGUNO
+    """.strip()
+
+        prompt = f"""
+    MENSAJE:
+
+    {user_message}
+    """.strip()
+
+        result = await self.generate(
+            prompt=prompt,
+            system=system,
+        )
+
+        if result.strip().upper() == "NINGUNO":
+            return []
+
+        facts = []
+
+        for line in result.splitlines():
+            line = line.strip()
+
+            if line.startswith("-"):
+                fact = line[1:].strip()
+
+                if fact:
+                    facts.append(fact)
+
+        return facts
