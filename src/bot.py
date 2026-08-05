@@ -3,7 +3,12 @@ from pathlib import Path
 
 import discord
 
-from src.config import DISCORD_TOKEN
+from src.config import (
+    DISCORD_TOKEN,
+    EMBEDDING_MODEL,
+    OLLAMA_MODEL,
+    VISION_MODEL,
+)
 from src.loaders import DocumentLoader
 from src.memory import ChannelMemory
 from src.ollama_client import OllamaClient
@@ -24,6 +29,13 @@ anterior, revisa la memoria y el historial proporcionados.
 Responde siempre en español de forma clara y útil.
 """.strip()
 
+IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".bmp",
+}
 
 class ComputahMindBot:
     def __init__(self):
@@ -53,6 +65,213 @@ class ComputahMindBot:
 
             channel_id = message.channel.id
             user_message = message.content.strip()
+
+            if user_message.lower() == "!docs":
+                documents = self.rag.list_documents(
+                    channel_id=channel_id,
+                )
+
+                if not documents:
+                    await message.channel.send(
+                        "Este canal no tiene documentos "
+                        "ni imágenes indexadas."
+                    )
+                    return
+
+                lines = []
+
+                for document in documents:
+                    document_id = document["document_id"]
+                    short_id = document_id[:12]
+                    file_name = document["file_name"]
+                    chunks = document["chunks"]
+                    kind = document.get(
+                        "kind",
+                        "document",
+                    )
+
+                    icon = (
+                        "🖼️"
+                        if kind == "image"
+                        else "📄"
+                    )
+
+                    lines.append(
+                        f"{icon} `{short_id}` — "
+                        f"`{file_name}` "
+                        f"({chunks} fragmentos)"
+                    )
+
+                await self.send_long_message(
+                    channel=message.channel,
+                    text=(
+                        "📚 **Contenido indexado en este canal:**\n"
+                        + "\n".join(lines)
+                        + "\n\nPara borrar uno usa:\n"
+                        "`!borrar-doc ID`"
+                    ),
+                )
+                return
+            
+            if user_message.lower().startswith("!borrar-doc"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!borrar-doc ID`"
+                    )
+                    return
+
+                requested_id = parts[1].strip()
+
+                documents = self.rag.list_documents(
+                    channel_id=channel_id,
+                )
+
+                matches = [
+                    document
+                    for document in documents
+                    if document["document_id"].startswith(
+                        requested_id
+                    )
+                ]
+
+                if not matches:
+                    await message.channel.send(
+                        "No encontré ningún documento "
+                        "con ese ID."
+                    )
+                    return
+
+                if len(matches) > 1:
+                    await message.channel.send(
+                        "Ese ID coincide con varios documentos. "
+                        "Escribe más caracteres del ID."
+                    )
+                    return
+
+                document = matches[0]
+
+                self.rag.delete_document(
+                    channel_id=channel_id,
+                    document_id=document["document_id"],
+                )
+
+                await message.channel.send(
+                    f"🗑️ Eliminé `{document['file_name']}` "
+                    "del RAG de este canal."
+                )
+                return
+
+            if user_message.lower().startswith("!borrar-doc"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!borrar-doc ID`"
+                    )
+                    return
+
+                requested_id = parts[1].strip()
+
+                documents = self.rag.list_documents(
+                    channel_id=channel_id,
+                )
+
+                matches = [
+                    document
+                    for document in documents
+                    if document["document_id"].startswith(
+                        requested_id
+                    )
+                ]
+
+                if not matches:
+                    await message.channel.send(
+                        "No encontré ningún documento "
+                        "con ese ID."
+                    )
+                    return
+
+                if len(matches) > 1:
+                    await message.channel.send(
+                        "Ese ID coincide con varios documentos. "
+                        "Escribe más caracteres del ID."
+                    )
+                    return
+
+                document = matches[0]
+
+                self.rag.delete_document(
+                    channel_id=channel_id,
+                    document_id=document["document_id"],
+                )
+
+                await message.channel.send(
+                    f"🗑️ Eliminé `{document['file_name']}` "
+                    "del RAG de este canal."
+                )
+                return
+            
+            if user_message.lower() == "!estado":
+                documents = self.rag.list_documents(
+                    channel_id=channel_id,
+                )
+
+                message_count = self.memory.count_messages(
+                    channel_id
+                )
+
+                facts = self.memory.get_facts(
+                    channel_id=channel_id,
+                    limit=100,
+                )
+
+                await message.channel.send(
+                    "⚙️ **Estado de ComputahMind**\n\n"
+                    f"💬 Modelo de texto: `{OLLAMA_MODEL}`\n"
+                    f"🖼️ Modelo visual: `{VISION_MODEL}`\n"
+                    f"🧬 Modelo de embeddings: "
+                    f"`{EMBEDDING_MODEL}`\n\n"
+                    f"📚 Fuentes indexadas: "
+                    f"`{len(documents)}`\n"
+                    f"💭 Mensajes guardados: "
+                    f"`{message_count}`\n"
+                    f"🧠 Hechos permanentes: "
+                    f"`{len(facts)}`"
+                )
+                return
+
+            if user_message.lower() in {
+                "!formatos",
+                "!documentos",
+                "!ayuda-archivos",
+            }:
+                document_formats = ", ".join(
+                    sorted(DocumentLoader.SUPPORTED_EXTENSIONS)
+                )
+
+                image_formats = (
+                    ".png, .jpg, .jpeg, .webp, .bmp"
+                )
+
+                await message.channel.send(
+                    "📂 **Formatos compatibles**\n\n"
+                    "**Documentos para RAG:**\n"
+                    f"`{document_formats}`\n\n"
+                    "**Imágenes para análisis visual:**\n"
+                    f"`{image_formats}`\n\n"
+                    "Puedes adjuntar una imagen sola para obtener una "
+                    "descripción, o acompañarla con una pregunta, por ejemplo:\n"
+                    "`¿Qué información contiene esta gráfica?`"
+                )
+                return
 
             # Muestra cuántos mensajes hay guardados.
             if user_message.lower() == "!memoria":
@@ -126,10 +345,16 @@ class ComputahMindBot:
                 # Primero procesa los documentos.
                 # Así se puede adjuntar un archivo y escribir una
                 # pregunta en el mismo mensaje.
-                if message.attachments:
-                    await self.process_attachments(message)
+                image_prompt_used = False
 
-                if user_message:
+                if message.attachments:
+                    image_prompt_used = await self.process_attachments(
+                        message
+                    )
+
+                # Si el texto fue usado como pregunta sobre una imagen,
+                # no lo enviamos otra vez como mensaje normal.
+                if user_message and not image_prompt_used:
                     await self.process_message(
                         message=message,
                         user_message=user_message,
@@ -138,8 +363,9 @@ class ComputahMindBot:
     async def process_attachments(
         self,
         message: discord.Message,
-    ) -> None:
+    ) -> bool:
         channel_id = message.channel.id
+        user_prompt = message.content.strip()
 
         upload_directory = (
             Path("data/uploads") / str(channel_id)
@@ -150,35 +376,132 @@ class ComputahMindBot:
             exist_ok=True,
         )
 
+        image_prompt_used = False
+
         for attachment in message.attachments:
             extension = Path(
                 attachment.filename
             ).suffix.lower()
 
+            safe_name = Path(
+                attachment.filename
+            ).name
+
+            file_path = upload_directory / (
+                f"{attachment.id}_{safe_name}"
+            )
+
+            # Procesamiento de imágenes.
+            if extension in IMAGE_EXTENSIONS:
+                try:
+                    await message.channel.send(
+                        f"🖼️ Analizando `{safe_name}`..."
+                    )
+
+                    await attachment.save(file_path)
+
+                    if user_prompt:
+                        vision_prompt = f"""
+            Analiza esta imagen exhaustivamente.
+
+            Primero crea una descripción objetiva que incluya:
+            - Objetos y personas visibles.
+            - Todo el texto legible.
+            - Tablas, gráficas o diagramas.
+            - Números, etiquetas y datos.
+            - Colores o posiciones relevantes.
+            - Cualquier detalle útil para futuras preguntas.
+
+            Después responde la siguiente pregunta del usuario:
+
+            {user_prompt}
+            """.strip()
+                    else:
+                        vision_prompt = """
+            Analiza esta imagen exhaustivamente.
+
+            Describe:
+            - Objetos y personas visibles.
+            - Todo el texto legible.
+            - Tablas, gráficas o diagramas.
+            - Números, etiquetas y datos.
+            - Colores o posiciones relevantes.
+            - Cualquier información útil para futuras preguntas.
+            """.strip()
+
+                    async with message.channel.typing():
+                        visual_analysis = await self.ollama.analyze_image(
+                            image_path=str(file_path),
+                            prompt=vision_prompt,
+                        )
+
+                        image_hash = self.rag.calculate_file_hash(
+                            str(file_path)
+                        )
+
+                        index_result = await self.rag.index_text(
+                            channel_id=channel_id,
+                            text=visual_analysis,
+                            source_name=safe_name,
+                            document_id=image_hash,
+                            kind="image",
+                        )
+
+                    await self.send_long_message(
+                        channel=message.channel,
+                        text=visual_analysis,
+                    )
+
+                    if index_result["status"] == "already_exists":
+                        await message.channel.send(
+                            f"ℹ️ La imagen `{safe_name}` "
+                            "ya estaba guardada en el RAG."
+                        )
+                    else:
+                        await message.channel.send(
+                            f"✅ Guardé el análisis de `{safe_name}` "
+                            "en el RAG.\n"
+                            f"Se crearon "
+                            f"{index_result['chunks']} fragmentos."
+                        )
+
+                    image_prompt_used = bool(user_prompt)
+
+                except Exception as error:
+                    file_path.unlink(
+                        missing_ok=True
+                    )
+
+                    print(
+                        f"Error analizando {safe_name}: "
+                        f"{type(error).__name__}: {error}"
+                    )
+
+                    await message.channel.send(
+                        f"❌ No pude analizar `{safe_name}`.\n"
+                        f"`{error}`"
+                    )
+
+                continue
+
+            # Procesamiento de documentos para RAG.
             if extension not in DocumentLoader.SUPPORTED_EXTENSIONS:
-                supported = ", ".join(
+                supported_documents = ", ".join(
                     sorted(
                         DocumentLoader.SUPPORTED_EXTENSIONS
                     )
                 )
 
+                supported_images = ", ".join(
+                    sorted(IMAGE_EXTENSIONS)
+                )
+
                 await message.channel.send(
-                    f"⚠️ `{attachment.filename}` no fue procesado.\n"
-                    f"Formatos compatibles: `{supported}`"
+                    f"⚠️ `{safe_name}` no fue procesado.\n"
+                    f"Documentos: `{supported_documents}`\n"
+                    f"Imágenes: `{supported_images}`"
                 )
                 continue
-
-            # Evita nombres que intenten incluir rutas,
-            # por ejemplo ../../archivo.pdf.
-            safe_name = Path(
-                attachment.filename
-            ).name
-
-            # El ID de Discord evita colisiones cuando dos archivos
-            # tienen el mismo nombre.
-            file_path = upload_directory / (
-                f"{attachment.id}_{safe_name}"
-            )
 
             try:
                 await message.channel.send(
@@ -198,7 +521,6 @@ class ComputahMindBot:
                     )
 
                 if result["status"] == "already_exists":
-                    # No necesitamos conservar una copia duplicada.
                     file_path.unlink(missing_ok=True)
 
                     await message.channel.send(
@@ -222,8 +544,10 @@ class ComputahMindBot:
 
                 await message.channel.send(
                     f"❌ No pude indexar `{safe_name}`.\n"
-                    f"Error: `{error}`"
+                    f"`{error}`"
                 )
+
+        return image_prompt_used
 
     async def process_message(
         self,
@@ -325,6 +649,8 @@ class ComputahMindBot:
                         channel_id=channel_id,
                         question=user_message,
                         ollama_client=self.ollama,
+                        facts=facts,
+                        history=history,
                         limit=5,
                     )
 

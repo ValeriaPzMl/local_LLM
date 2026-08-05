@@ -2,7 +2,14 @@ import asyncio
 
 import aiohttp
 
-from src.config import OLLAMA_MODEL, OLLAMA_URL
+from src.config import (
+    OLLAMA_MODEL,
+    OLLAMA_URL,
+    VISION_MODEL,
+)
+
+import base64
+from pathlib import Path
 
 
 class OllamaClient:
@@ -182,3 +189,85 @@ class OllamaClient:
                     facts.append(fact)
 
         return facts
+    async def analyze_image(
+        self,
+        image_path: str,
+        prompt: str | None = None,
+    ) -> str:
+        path = Path(image_path)
+
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No existe la imagen: {path}"
+            )
+
+        image_base64 = base64.b64encode(
+            path.read_bytes()
+        ).decode("utf-8")
+
+        user_prompt = (
+            prompt.strip()
+            if prompt and prompt.strip()
+            else (
+                "Describe detalladamente esta imagen. "
+                "Identifica texto, objetos, diagramas, tablas "
+                "y cualquier información importante."
+            )
+        )
+
+        payload = {
+            "model": VISION_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                    "images": [image_base64],
+                }
+            ],
+            "stream": False,
+            "think": False,
+        }
+
+        try:
+            async with aiohttp.ClientSession(
+                timeout=self.timeout,
+            ) as session:
+                async with session.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                ) as response:
+                    data = await response.json()
+
+                    if response.status != 200:
+                        error_message = data.get(
+                            "error",
+                            "Error desconocido",
+                        )
+
+                        raise RuntimeError(
+                            f"Ollama respondió con HTTP "
+                            f"{response.status}: {error_message}"
+                        )
+
+            message = data.get("message", {})
+            content = message.get("content", "").strip()
+
+            if not content:
+                print("Respuesta visual completa de Ollama:")
+                print(data)
+
+                raise RuntimeError(
+                    "El modelo visual no devolvió contenido."
+                )
+
+            return content
+
+        except aiohttp.ClientConnectorError as error:
+            raise RuntimeError(
+                "No se pudo conectar con Ollama."
+            ) from error
+
+        except asyncio.TimeoutError as error:
+            raise RuntimeError(
+                "El modelo visual tardó demasiado."
+            ) from error

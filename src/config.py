@@ -22,6 +22,11 @@ EMBEDDING_MODEL = os.getenv(
     "nomic-embed-text",
 )
 
+VISION_MODEL = os.getenv(
+    "VISION_MODEL",
+    "qwen3-vl:4b",
+)
+
 if not DISCORD_TOKEN:
     raise ValueError(
         "No se encontró DISCORD_TOKEN en el archivo .env"

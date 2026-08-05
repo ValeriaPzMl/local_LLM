@@ -208,8 +208,8 @@ class DocumentLoader:
 
         return "\n".join(rows)
 
-    @staticmethod
-    def load_json(path: Path) -> str:
+    @classmethod
+    def load_json(cls, path: Path) -> str:
         with path.open(
             "r",
             encoding="utf-8",
@@ -217,10 +217,53 @@ class DocumentLoader:
         ) as file:
             data = json.load(file)
 
-        return json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2,
+        lines = []
+        cls.flatten_json(
+            value=data,
+            prefix="",
+            output=lines,
+        )
+
+        return "\n".join(lines)
+
+
+    @classmethod
+    def flatten_json(
+        cls,
+        value,
+        prefix: str,
+        output: list[str],
+    ) -> None:
+        if isinstance(value, dict):
+            for key, child_value in value.items():
+                child_prefix = (
+                    f"{prefix}.{key}"
+                    if prefix
+                    else str(key)
+                )
+
+                cls.flatten_json(
+                    value=child_value,
+                    prefix=child_prefix,
+                    output=output,
+                )
+
+            return
+
+        if isinstance(value, list):
+            for index, child_value in enumerate(value):
+                child_prefix = f"{prefix}[{index}]"
+
+                cls.flatten_json(
+                    value=child_value,
+                    prefix=child_prefix,
+                    output=output,
+                )
+
+            return
+
+        output.append(
+            f"{prefix}: {value}"
         )
 
     @staticmethod
