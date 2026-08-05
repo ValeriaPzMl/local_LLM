@@ -2,6 +2,7 @@ import hashlib
 from pathlib import Path
 
 import chromadb
+import re
 
 from src.embeddings import OllamaEmbeddings
 from src.loaders import DocumentLoader
@@ -262,13 +263,98 @@ class RAGService:
             "chunks": len(chunks),
             "kind": kind,
         }
+    @staticmethod
+    def tokenize(text: str) -> set[str]:
+        """
+        Convierte un texto en palabras normalizadas para comparar
+        coincidencias literales entre la pregunta y los fragmentos.
+        """
+        words = re.findall(
+            r"\b[\wáéíóúüñ]+\b",
+            text.lower(),
+        )
 
+        stopwords = {
+            "a",
+            "al",
+            "algo",
+            "como",
+            "con",
+            "de",
+            "del",
+            "el",
+            "ella",
+            "en",
+            "es",
+            "esta",
+            "este",
+            "la",
+            "las",
+            "lo",
+            "los",
+            "para",
+            "por",
+            "que",
+            "se",
+            "su",
+            "un",
+            "una",
+            "y",
+        }
+
+        return {
+            word
+            for word in words
+            if len(word) > 2
+            and word not in stopwords
+        }
+
+
+    @classmethod
+    def lexical_score(
+        cls,
+        query: str,
+        document: str,
+    ) -> float:
+        """
+        Calcula qué proporción de palabras importantes de la pregunta
+        aparece literalmente dentro del fragmento.
+        """
+        query_words = cls.tokenize(query)
+
+        if not query_words:
+            return 0.0
+
+        document_words = cls.tokenize(document)
+
+        matches = query_words.intersection(
+            document_words
+        )
+
+        return len(matches) / len(query_words)
+
+
+    @staticmethod
+    def semantic_score(distance: float | None) -> float:
+        """
+        Convierte una distancia de Chroma en una puntuación entre 0 y 1.
+
+        Menor distancia = mayor puntuación.
+        """
+        if distance is None:
+            return 0.0
+
+        distance = max(float(distance), 0.0)
+
+        return 1.0 / (1.0 + distance)
     async def search(
-        self,
+    self,
         channel_id: int,
         query: str,
         limit: int = 5,
-        max_per_source: int = 2,
+        semantic_weight: float = 0.75,
+        lexical_weight: float = 0.20,
+        diversity_weight: float = 0.05,
     ) -> list[dict]:
         collection = self.get_collection(channel_id)
         total_chunks = collection.count()
@@ -280,21 +366,36 @@ class RAGService:
             query
         )
 
-        # Recuperamos más candidatos de los que mostraremos.
-        # Esto permite encontrar información en documentos pequeños.
+        # Recuperamos bastantes candidatos y luego los reordenamos.
         candidate_limit = min(
-            max(limit * 5, limit),
+            max(limit * 8, 30),
             total_chunks,
         )
 
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=candidate_limit,
+            include=[
+                "documents",
+                "metadatas",
+                "distances",
+            ],
         )
 
-        documents = results.get("documents", [[]])[0]
-        metadatas = results.get("metadatas", [[]])[0]
-        distances = results.get("distances", [[]])[0]
+        documents = results.get(
+            "documents",
+            [[]],
+        )[0]
+
+        metadatas = results.get(
+            "metadatas",
+            [[]],
+        )[0]
+
+        distances = results.get(
+            "distances",
+            [[]],
+        )[0]
 
         candidates = []
 
@@ -303,36 +404,102 @@ class RAGService:
             metadatas,
             distances,
         ):
+            if not document:
+                continue
+
+            metadata = metadata or {}
+
+            semantic = self.semantic_score(
+                distance
+            )
+
+            lexical = self.lexical_score(
+                query=query,
+                document=document,
+            )
+
+            base_score = (
+                semantic_weight * semantic
+                + lexical_weight * lexical
+            )
+
             candidates.append(
                 {
                     "text": document,
-                    "metadata": metadata or {},
+                    "metadata": metadata,
                     "distance": distance,
+                    "semantic_score": semantic,
+                    "lexical_score": lexical,
+                    "base_score": base_score,
                 }
             )
 
-        # Evita que un PDF grande ocupe todos los resultados.
+        # Primero ordenamos por relevancia pura.
+        candidates.sort(
+            key=lambda item: item["base_score"],
+            reverse=True,
+        )
+
         selected = []
         source_counts: dict[str, int] = {}
 
-        for candidate in candidates:
-            source = candidate["metadata"].get(
-                "source",
-                "Documento desconocido",
-            )
+        while candidates and len(selected) < limit:
+            best_candidate = None
+            best_final_score = float("-inf")
 
-            current_count = source_counts.get(source, 0)
+            for candidate in candidates:
+                source = candidate["metadata"].get(
+                    "source",
+                    "Documento desconocido",
+                )
 
-            if current_count >= max_per_source:
-                continue
+                previous_uses = source_counts.get(
+                    source,
+                    0,
+                )
 
-            selected.append(candidate)
-            source_counts[source] = current_count + 1
+                # La primera aparición de una fuente recibe una pequeña
+                # bonificación. Las siguientes no se descartan, solo
+                # pierden progresivamente esa bonificación.
+                diversity_bonus = (
+                    diversity_weight
+                    if previous_uses == 0
+                    else -diversity_weight * previous_uses
+                )
 
-            if len(selected) >= limit:
+                final_score = (
+                    candidate["base_score"]
+                    + diversity_bonus
+                )
+
+                candidate["final_score"] = final_score
+
+                if final_score > best_final_score:
+                    best_candidate = candidate
+                    best_final_score = final_score
+
+            if best_candidate is None:
                 break
 
-        return selected 
+            selected.append(best_candidate)
+            candidates.remove(best_candidate)
+
+            selected_source = (
+                best_candidate["metadata"].get(
+                    "source",
+                    "Documento desconocido",
+                )
+            )
+
+            source_counts[selected_source] = (
+                source_counts.get(
+                    selected_source,
+                    0,
+                )
+                + 1
+            )
+
+        return selected
     def delete_document(
         self,
         channel_id: int,
@@ -367,9 +534,22 @@ class RAGService:
         for position, result in enumerate(results, start=1):
             metadata = result.get("metadata") or {}
 
-            source = metadata.get(
-                "source",
-                "Documento desconocido",
+            sources.append(
+                {
+                    "number": position,
+                    "source": source,
+                    "chunk_index": chunk_index,
+                    "distance": result.get("distance"),
+                    "semantic_score": result.get(
+                        "semantic_score",
+                    ),
+                    "lexical_score": result.get(
+                        "lexical_score",
+                    ),
+                    "final_score": result.get(
+                        "final_score",
+                    ),
+                }
             )
 
             chunk_index = int(

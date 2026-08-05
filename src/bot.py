@@ -112,57 +112,63 @@ class ComputahMindBot:
                     ),
                 )
                 return
-            
-            if user_message.lower().startswith("!borrar-doc"):
-                parts = user_message.split(
-                    maxsplit=1
-                )
-
-                if len(parts) < 2:
-                    await message.channel.send(
-                        "Uso correcto:\n"
-                        "`!borrar-doc ID`"
-                    )
-                    return
-
-                requested_id = parts[1].strip()
-
-                documents = self.rag.list_documents(
+            if user_message.lower() == "!fuentes":
+                sources = self.rag.get_last_sources(
                     channel_id=channel_id,
                 )
 
-                matches = [
-                    document
-                    for document in documents
-                    if document["document_id"].startswith(
-                        requested_id
-                    )
-                ]
-
-                if not matches:
+                if not sources:
                     await message.channel.send(
-                        "No encontré ningún documento "
-                        "con ese ID."
+                        "Todavía no hay fuentes recuperadas en este canal."
                     )
                     return
 
-                if len(matches) > 1:
-                    await message.channel.send(
-                        "Ese ID coincide con varios documentos. "
-                        "Escribe más caracteres del ID."
+                lines = []
+
+                for source in sources:
+                    distance = source.get("distance")
+                    semantic = source.get("semantic_score")
+                    lexical = source.get("lexical_score")
+                    final_score = source.get("final_score")
+
+                    distance_text = (
+                        f"{distance:.4f}"
+                        if isinstance(distance, (int, float))
+                        else "N/D"
                     )
-                    return
 
-                document = matches[0]
+                    semantic_text = (
+                        f"{semantic:.3f}"
+                        if isinstance(semantic, (int, float))
+                        else "N/D"
+                    )
 
-                self.rag.delete_document(
-                    channel_id=channel_id,
-                    document_id=document["document_id"],
-                )
+                    lexical_text = (
+                        f"{lexical:.3f}"
+                        if isinstance(lexical, (int, float))
+                        else "N/D"
+                    )
 
-                await message.channel.send(
-                    f"🗑️ Eliminé `{document['file_name']}` "
-                    "del RAG de este canal."
+                    final_text = (
+                        f"{final_score:.3f}"
+                        if isinstance(final_score, (int, float))
+                        else "N/D"
+                    )
+
+                    lines.append(
+                        f"📄 [Fuente {source['number']}] "
+                        f"`{source['source']}`\n"
+                        f"   Fragmento: {source['chunk_index'] + 1}\n"
+                        f"   Distancia: {distance_text}\n"
+                        f"   Semántica: {semantic_text}\n"
+                        f"   Léxica: {lexical_text}\n"
+                        f"   Score final: {final_text}"
+                    )
+
+                await self.send_long_message(
+                    channel=message.channel,
+                    text="🔎 **Últimas fuentes recuperadas:**\n\n"
+                    + "\n\n".join(lines),
                 )
                 return
 
@@ -233,21 +239,59 @@ class ComputahMindBot:
                     limit=100,
                 )
 
-                await message.channel.send(
+                document_count = sum(
+                    1
+                    for document in documents
+                    if document.get("kind") != "image"
+                )
+
+                image_count = sum(
+                    1
+                    for document in documents
+                    if document.get("kind") == "image"
+                )
+
+                total_chunks = sum(
+                    document.get("chunks", 0)
+                    for document in documents
+                )
+
+                collection = self.rag.get_collection(
+                    channel_id
+                )
+
+                vector_count = collection.count()
+
+                status_text = (
                     "⚙️ **Estado de ComputahMind**\n\n"
-                    f"💬 Modelo de texto: `{OLLAMA_MODEL}`\n"
-                    f"🖼️ Modelo visual: `{VISION_MODEL}`\n"
-                    f"🧬 Modelo de embeddings: "
-                    f"`{EMBEDDING_MODEL}`\n\n"
-                    f"📚 Fuentes indexadas: "
-                    f"`{len(documents)}`\n"
-                    f"💭 Mensajes guardados: "
-                    f"`{message_count}`\n"
-                    f"🧠 Hechos permanentes: "
-                    f"`{len(facts)}`"
+
+                    "🤖 **Modelos**\n"
+                    f"💬 Texto: `{OLLAMA_MODEL}`\n"
+                    f"🖼️ Visión: `{VISION_MODEL}`\n"
+                    f"🧬 Embeddings: `{EMBEDDING_MODEL}`\n\n"
+
+                    "📚 **RAG del canal**\n"
+                    f"📄 Documentos: `{document_count}`\n"
+                    f"🖼️ Imágenes: `{image_count}`\n"
+                    f"📦 Fuentes totales: `{len(documents)}`\n"
+                    f"🧩 Fragmentos: `{total_chunks}`\n"
+                    f"🔢 Vectores en Chroma: `{vector_count}`\n\n"
+
+                    "🧠 **Memoria**\n"
+                    f"💭 Mensajes guardados: `{message_count}`\n"
+                    f"📌 Hechos permanentes: `{len(facts)}`\n\n"
+
+                    "💾 **Servicios**\n"
+                    "✅ SQLite conectado\n"
+                    "✅ ChromaDB conectado\n"
+                    "✅ Ollama configurado"
+                )
+
+                await self.send_long_message(
+                    channel=message.channel,
+                    text=status_text,
                 )
                 return
-
             if user_message.lower() in {
                 "!formatos",
                 "!documentos",
