@@ -446,32 +446,19 @@ class ComputahMindBot:
 
                     if user_prompt:
                         vision_prompt = f"""
-            Analiza esta imagen exhaustivamente.
+                    Observa la imagen y responde únicamente a la petición del usuario.
 
-            Primero crea una descripción objetiva que incluya:
-            - Objetos y personas visibles.
-            - Todo el texto legible.
-            - Tablas, gráficas o diagramas.
-            - Números, etiquetas y datos.
-            - Colores o posiciones relevantes.
-            - Cualquier detalle útil para futuras preguntas.
+                    Petición:
+                    {user_prompt}
 
-            Después responde la siguiente pregunta del usuario:
-
-            {user_prompt}
-            """.strip()
+                    Sé preciso y no describas elementos que no sean necesarios.
+                    """.strip()
                     else:
                         vision_prompt = """
-            Analiza esta imagen exhaustivamente.
-
-            Describe:
-            - Objetos y personas visibles.
-            - Todo el texto legible.
-            - Tablas, gráficas o diagramas.
-            - Números, etiquetas y datos.
-            - Colores o posiciones relevantes.
-            - Cualquier información útil para futuras preguntas.
-            """.strip()
+                    Describe brevemente la imagen e identifica cualquier texto,
+                    tabla, gráfica o dato importante visible.
+                    """.strip()
+                   
 
                     async with message.channel.typing():
                         visual_analysis = await self.ollama.analyze_image(

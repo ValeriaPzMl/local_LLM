@@ -512,6 +512,7 @@ class RAGService:
                 "document_id": document_id,
             }
         )
+        
     async def build_context(
         self,
         channel_id: int,
@@ -534,22 +535,9 @@ class RAGService:
         for position, result in enumerate(results, start=1):
             metadata = result.get("metadata") or {}
 
-            sources.append(
-                {
-                    "number": position,
-                    "source": source,
-                    "chunk_index": chunk_index,
-                    "distance": result.get("distance"),
-                    "semantic_score": result.get(
-                        "semantic_score",
-                    ),
-                    "lexical_score": result.get(
-                        "lexical_score",
-                    ),
-                    "final_score": result.get(
-                        "final_score",
-                    ),
-                }
+            source = metadata.get(
+                "source",
+                "Documento desconocido",
             )
 
             chunk_index = int(
@@ -576,13 +564,21 @@ class RAGService:
                         "source": source,
                         "chunk_index": chunk_index,
                         "distance": result.get("distance"),
+                        "semantic_score": result.get(
+                            "semantic_score",
+                        ),
+                        "lexical_score": result.get(
+                            "lexical_score",
+                        ),
+                        "final_score": result.get(
+                            "final_score",
+                        ),
                     }
                 )
 
         context = "\n\n---\n\n".join(context_blocks)
 
         return context, sources
-
 
     async def answer_question(
         self,

@@ -226,6 +226,10 @@ class OllamaClient:
             ],
             "stream": False,
             "think": False,
+            "options": {
+                "num_predict": 1200,
+                "temperature": 0.2,
+            },
         }
 
         try:
@@ -253,11 +257,23 @@ class OllamaClient:
             content = message.get("content", "").strip()
 
             if not content:
-                print("Respuesta visual completa de Ollama:")
-                print(data)
+                thinking = message.get("thinking", "").strip()
+                done_reason = data.get("done_reason", "desconocido")
+
+                print(
+                    "El modelo visual no produjo respuesta final. "
+                    f"Motivo: {done_reason}"
+                )
+
+                if thinking:
+                    print(
+                        "El modelo generó razonamiento, "
+                        "pero agotó la salida antes de responder."
+                    )
 
                 raise RuntimeError(
-                    "El modelo visual no devolvió contenido."
+                    "El modelo visual agotó su límite antes de producir "
+                    "la respuesta final. Intenta una pregunta más directa."
                 )
 
             return content
