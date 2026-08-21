@@ -28,7 +28,7 @@ VISION_MODEL = os.getenv(
 )
 CODING_MODEL = os.getenv(
     "CODING_MODEL",
-    "qwen2.5-coder:7b",
+    "qwen3.5:9b",
 )
 
 if not DISCORD_TOKEN:

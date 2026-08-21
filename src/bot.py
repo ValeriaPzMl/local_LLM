@@ -374,6 +374,65 @@ class ComputahMindBot:
                     "de este canal."
                 )
                 return
+            if user_message.lower().startswith("!ruta"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!ruta /ruta/al/proyecto`"
+                    )
+                    return
+
+                raw_path = parts[1].strip()
+
+                project_path = Path(
+                    raw_path
+                ).expanduser().resolve()
+
+                if not project_path.exists():
+                    await message.channel.send(
+                        "❌ Esa ruta no existe."
+                    )
+                    return
+
+                if not project_path.is_dir():
+                    await message.channel.send(
+                        "❌ La ruta debe apuntar a una carpeta."
+                    )
+                    return
+
+                self.memory.set_workspace(
+                    channel_id=channel_id,
+                    workspace=str(project_path),
+                )
+
+                await message.channel.send(
+                    "✅ Workspace configurado:\n"
+                    f"`{project_path}`"
+                )
+                return
+            if user_message.lower() == "!proyecto":
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "Este canal todavía no tiene un "
+                        "workspace configurado.\n\n"
+                        "Usa:\n"
+                        "`!ruta /ruta/al/proyecto`"
+                    )
+                    return
+
+                await message.channel.send(
+                    "📁 **Workspace actual:**\n"
+                    f"`{workspace}`"
+                )
+                return
 
             # Si no hay texto ni adjuntos, no hay nada
             # que procesar.

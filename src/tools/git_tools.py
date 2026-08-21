@@ -85,9 +85,9 @@ def git_diff(
         arguments,
     )
 
-    if len(output) > 12_000:
+    if len(output) > 8_000:
         output = (
-            output[:12_000]
+            output[:8_000]
             + "\n\n... diff truncado ..."
         )
 

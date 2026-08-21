@@ -37,6 +37,15 @@ class ChannelMemory:
             )
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channel_workspaces (
+                channel_id TEXT PRIMARY KEY,
+                workspace TEXT NOT NULL
+            )
+            """
+        )
+
         self.connection.commit()
 
     def add_message(
@@ -178,3 +187,47 @@ class ChannelMemory:
         )
 
         self.connection.commit()
+
+    def set_workspace(
+        self,
+        channel_id: int,
+        workspace: str,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO channel_workspaces (
+                channel_id,
+                workspace
+            )
+            VALUES (?, ?)
+            ON CONFLICT(channel_id)
+            DO UPDATE SET workspace = excluded.workspace
+            """,
+            (
+                str(channel_id),
+                workspace,
+            ),
+        )
+
+        self.connection.commit()
+
+
+    def get_workspace(
+        self,
+        channel_id: int,
+    ) -> str | None:
+        cursor = self.connection.execute(
+            """
+            SELECT workspace
+            FROM channel_workspaces
+            WHERE channel_id = ?
+            """,
+            (str(channel_id),),
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return row["workspace"]

@@ -6,6 +6,13 @@ import aiohttp
 from src.agents.permissions import PermissionLevel
 from src.config import CODING_MODEL, OLLAMA_URL
 from src.tools.tool_registry import ToolRegistry
+from src.agents.change_request import (
+    ChangeRequest,
+    create_change_request,
+)
+from src.tools.diff_tools import create_unified_diff
+from src.tools.file_tools import resolve_safe_path
+from src.agents.change_store import ChangeStore
 
 
 CODING_SYSTEM_PROMPT = """
@@ -63,6 +70,23 @@ Reglas:
     analizar específicamente la implementación de un archivo.
 26. Los resultados de git_status y git_diff son la fuente de verdad
     para preguntas sobre el estado actual del repositorio.
+27. Cuando el usuario solicite modificar código, primero inspecciona
+    los archivos relevantes.
+28. Nunca uses write_file directamente.
+29. Para modificar código debes usar propose_change.
+30. propose_change NO modifica el archivo; únicamente crea una
+    propuesta pendiente para que el usuario la revise.
+31. El contenido de new_content debe representar el archivo completo
+    después de aplicar la modificación.
+32. Después de crear una propuesta, explica brevemente qué cambiaría
+    y espera aprobación.
+33. Crear una propuesta NO requiere aprobación del usuario.
+34. Si el usuario pide modificar código, debes crear directamente
+    una propuesta con propose_change.
+35. No preguntes "¿quieres que proponga el cambio?". Proponer es seguro.
+36. La aprobación solamente es necesaria para APLICAR una propuesta.
+37. Después de usar propose_change, informa el ID de la propuesta
+    y espera aprobación.
 """.strip()
 
 
@@ -75,12 +99,26 @@ class CodingAgent:
         max_steps: int = 10,
     ):
         self.workspace = workspace.resolve()
+
+        if not self.workspace.exists():
+            raise ValueError(
+                f"El workspace no existe: {self.workspace}"
+            )
+
+        if not self.workspace.is_dir():
+            raise ValueError(
+                f"El workspace debe ser una carpeta: {self.workspace}"
+            )
+
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.max_steps = max_steps
 
         self.tools = ToolRegistry(
             workspace=self.workspace
+        )
+        self.change_store = ChangeStore(
+            "data/memory.db"
         )
 
         self.timeout = aiohttp.ClientTimeout(
@@ -207,6 +245,45 @@ class CodingAgent:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "propose_change",
+                    "description": (
+                        "Propone una modificación completa para un archivo. "
+                        "NO aplica el cambio. El usuario deberá aprobarlo."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": (
+                                    "Ruta relativa del archivo a modificar."
+                                ),
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": (
+                                    "Descripción breve del cambio."
+                                ),
+                            },
+                            "new_content": {
+                                "type": "string",
+                                "description": (
+                                    "Contenido completo que debería tener "
+                                    "el archivo después del cambio."
+                                ),
+                            },
+                        },
+                        "required": [
+                            "file_path",
+                            "description",
+                            "new_content",
+                        ],
+                    },
+                },
+            },
         ]
 
     async def _chat(
@@ -219,6 +296,11 @@ class CodingAgent:
             "tools": self.get_tool_schemas(),
             "stream": False,
             "think": False,
+            "options": {
+                "num_ctx": 4096,
+                "num_predict": 800,
+                "temperature": 0.1,
+            },
         }
 
         async with aiohttp.ClientSession(
@@ -280,14 +362,21 @@ class CodingAgent:
             "arguments",
             {},
         )
-
+        
         if not isinstance(tool_name, str):
             return None
 
         if not isinstance(arguments, dict):
             arguments = {}
 
-        if self.tools.get(tool_name) is None:
+        virtual_tools = {
+            "propose_change",
+        }
+
+        if (
+            self.tools.get(tool_name) is None
+            and tool_name not in virtual_tools
+        ):
             return None
 
         return {
@@ -376,6 +465,166 @@ class CodingAgent:
             required.add("git_diff")
 
         return required
+    def _requires_change_proposal(
+        self,
+        task: str,
+    ) -> bool:
+        task_lower = task.lower()
+
+        change_keywords = {
+            "modifica",
+            "modificar",
+            "cambia",
+            "cambiar",
+            "agrega",
+            "agregar",
+            "añade",
+            "añadir",
+            "corrige",
+            "corregir",
+            "arregla",
+            "arreglar",
+            "implementa",
+            "implementar",
+            "refactoriza",
+            "refactorizar",
+            "elimina",
+            "eliminar",
+            "crea",
+            "crear",
+        }
+
+        return any(
+            keyword in task_lower
+            for keyword in change_keywords
+        )
+    def create_pending_change(
+        self,
+        file_path: str,
+        original_content: str,
+        new_content: str,
+        description: str,
+    ) -> ChangeRequest:
+        change = create_change_request(
+            workspace=self.workspace,
+            file_path=file_path,
+            original_content=original_content,
+            new_content=new_content,
+            description=description,
+        )
+
+        self.change_store.save(
+            change
+        )
+
+        return change
+    def get_pending_change(
+        self,
+        change_id: str,
+    ) -> ChangeRequest | None:
+        return self.change_store.get(
+            change_id
+        )
+    def list_pending_changes(
+        self,
+    ) -> list[ChangeRequest]:
+        return self.change_store.list_pending(
+            workspace=self.workspace
+        )
+    def get_change_diff(
+        self,
+        change_id: str,
+    ) -> str:
+        change = self.get_pending_change(
+            change_id
+        )
+
+        if change is None:
+            raise ValueError(
+                f"No existe la propuesta {change_id}."
+            )
+
+        return create_unified_diff(
+            original_content=change.original_content,
+            new_content=change.new_content,
+            file_path=change.file_path,
+        )
+    def approve_change(
+        self,
+        change_id: str,
+    ) -> str:
+        change = self.get_pending_change(
+            change_id
+        )
+
+        if change is None:
+            raise ValueError(
+                f"No existe la propuesta {change_id}."
+            )
+
+        if change.rejected:
+            raise ValueError(
+                "La propuesta fue rechazada."
+            )
+
+        if change.applied:
+            return (
+                f"La propuesta {change_id} "
+                "ya fue aplicada."
+            )
+
+        tool = self.tools.get(
+            "write_file"
+        )
+
+        if tool is None:
+            raise RuntimeError(
+                "write_file no está registrado."
+            )
+
+        # No usamos self.tools.execute() porque ese método
+        # bloquearía correctamente las herramientas Nivel 2.
+        # Aquí Python la ejecuta después de aprobación explícita.
+        result = tool.function(
+            self.workspace,
+            relative_path=change.file_path,
+            content=change.new_content,
+        )
+
+        change.approved = True
+        change.applied = True
+        self.change_store.update_status(
+            change
+        )
+
+        return str(result)
+    def reject_change(
+        self,
+        change_id: str,
+    ) -> str:
+        change = self.get_pending_change(
+            change_id
+        )
+
+        if change is None:
+            raise ValueError(
+                f"No existe la propuesta {change_id}."
+            )
+
+        if change.applied:
+            raise ValueError(
+                "No puedes rechazar una propuesta "
+                "que ya fue aplicada."
+            )
+
+        change.rejected = True
+        self.change_store.update_status(
+            change
+        )
+
+        return (
+            f"Propuesta {change_id} rechazada."
+        )
     async def run(
         self,
         task: str,
@@ -392,6 +641,7 @@ class CodingAgent:
         ]
         attempted_tools: list[str] = []
         successful_tools: list[str] = []
+        created_change_ids: list[str] = []
 
         for step in range(
             1,
@@ -442,32 +692,11 @@ class CodingAgent:
 
             if not tool_calls:
                 if not content:
-                    print(
-                        "[CodingAgent] El modelo devolvió "
-                        "una respuesta vacía."
+                    raise RuntimeError(
+                        "Ollama devolvió una respuesta vacía. "
+                        "Probablemente el modelo se quedó sin memoria."
                     )
 
-                    print(
-                        "[CodingAgent] Respuesta completa de Ollama:"
-                    )
-
-                    print(data)
-
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Tu respuesta anterior quedó vacía. "
-                                "Continúa con la tarea. "
-                                "Si necesitas información adicional, "
-                                "usa una herramienta. "
-                                "Si ya tienes suficiente evidencia, "
-                                "entrega la respuesta final."
-                            ),
-                        }
-                    )
-
-                    continue
 
                 # 1. Primero comprobamos herramientas obligatorias.
                 required_tools = self._required_tools_for_task(
@@ -544,7 +773,36 @@ class CodingAgent:
                     )
 
                     continue
+                requires_change = (
+                    self._requires_change_proposal(task)
+                )
 
+                has_proposed_change = (
+                    "propose_change" in successful_tools
+                )
+
+                if requires_change and not has_proposed_change:
+                    print(
+                        "[CodingAgent] Respuesta rechazada: "
+                        "la tarea requiere una propuesta real."
+                    )
+
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "No puedes terminar todavía. "
+                                "El usuario pidió modificar código y aún "
+                                "no has creado una propuesta real.\n\n"
+                                "Debes usar propose_change ahora. "
+                                "No preguntes si puede proponer el cambio: "
+                                "crea la propuesta sin aplicarla. "
+                                "La aprobación ocurrirá después."
+                            ),
+                        }
+                    )
+
+                    continue
                 return self._clean_final_response(
                     content
                 )
@@ -565,7 +823,72 @@ class CodingAgent:
                     "arguments",
                     {},
                 )
+                if tool_name == "propose_change":
+                    try:
+                        file_path = arguments[
+                            "file_path"
+                        ]
 
+                        description = arguments[
+                            "description"
+                        ]
+
+                        new_content = arguments[
+                            "new_content"
+                        ]
+
+                        # Leemos el archivo real nosotros mismos.
+                        target = resolve_safe_path(
+                            self.workspace,
+                            file_path,
+                        )
+
+                        original_content = target.read_text(
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+
+                        change = self.create_pending_change(
+                            file_path=file_path,
+                            original_content=original_content,
+                            new_content=new_content,
+                            description=description,
+                        )
+                        created_change_ids.append(
+                            change.id
+                        )
+
+                        successful_tools.append(
+                            "propose_change"
+                        )
+
+                        diff = self.get_change_diff(
+                            change.id
+                        )
+
+                        result = (
+                            f"PROPUESTA CREADA\n"
+                            f"ID: {change.id}\n"
+                            f"Archivo: {file_path}\n"
+                            f"Descripción: {description}\n\n"
+                            f"DIFF:\n{diff}"
+                        )
+
+                    except Exception as error:
+                        result = (
+                            "Error creando propuesta: "
+                            f"{error}"
+                        )
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_name": tool_name,
+                            "content": result,
+                        }
+                    )
+
+                    continue
                 if isinstance(arguments, str):
                     try:
                         arguments = json.loads(

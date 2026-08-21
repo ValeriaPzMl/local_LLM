@@ -132,7 +132,7 @@ def list_files(
 def read_file(
     workspace: Path,
     relative_path: str,
-    max_characters: int = 30_000,
+    max_characters: int = 12_000,
 ) -> str:
     target = resolve_safe_path(
         workspace,
@@ -251,3 +251,27 @@ def search_code(
         )
 
     return "\n".join(results)
+def write_file(
+    workspace: Path,
+    relative_path: str,
+    content: str,
+) -> str:
+    target = resolve_safe_path(
+        workspace,
+        relative_path,
+    )
+
+    target.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    target.write_text(
+        content,
+        encoding="utf-8",
+    )
+
+    return (
+        f"Archivo actualizado correctamente: "
+        f"{relative_path}"
+    )

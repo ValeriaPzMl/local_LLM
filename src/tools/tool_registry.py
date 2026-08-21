@@ -11,6 +11,7 @@ from src.tools.file_tools import (
     list_files,
     read_file,
     search_code,
+    write_file,
 )
 from src.tools.git_tools import (
     git_diff,
@@ -84,6 +85,14 @@ class ToolRegistry:
                 "Argumento opcional: staged."
             ),
             function=git_diff,
+        )
+        self.register(
+            name="write_file",
+            description=(
+                "Escribe contenido en un archivo del workspace. "
+                "Requiere aprobación explícita del usuario."
+            ),
+            function=write_file,
         )
 
     def register(
