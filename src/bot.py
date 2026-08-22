@@ -13,6 +13,8 @@ from src.loaders import DocumentLoader
 from src.memory import ChannelMemory
 from src.ollama_client import OllamaClient
 from src.rag import RAGService
+from pathlib import Path
+from src.agents.coding_agent import CodingAgent
 
 
 SYSTEM_PROMPT = """
@@ -292,6 +294,47 @@ class ComputahMindBot:
                     text=status_text,
                 )
                 return
+            if user_message.lower() == "!ejecuciones":
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene proyecto configurado."
+                    )
+                    return
+
+                agent = CodingAgent(
+                    workspace=Path(workspace)
+                )
+
+                runs = agent.list_pending_runs()
+
+                if not runs:
+                    await message.channel.send(
+                        "No hay ejecuciones pendientes."
+                    )
+                    return
+
+                lines = []
+
+                for run in runs:
+                    lines.append(
+                        f"🧪 `{run.id}`\n"
+                        f"Comando: `{run.command}`\n"
+                        f"{run.description}"
+                    )
+
+                await self.send_long_message(
+                    channel=message.channel,
+                    text=(
+                        "🧪 **Ejecuciones pendientes:**\n\n"
+                        + "\n\n".join(lines)
+                    ),
+                )
+
+                return
             if user_message.lower() in {
                 "!formatos",
                 "!documentos",
@@ -316,7 +359,103 @@ class ComputahMindBot:
                     "`¿Qué información contiene esta gráfica?`"
                 )
                 return
+            if user_message.lower().startswith("!aprobar-run"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
 
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!aprobar-run <id>`"
+                    )
+                    return
+
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene proyecto configurado."
+                    )
+                    return
+
+                run_id = parts[1].strip()
+
+                try:
+                    agent = CodingAgent(
+                        workspace=Path(workspace)
+                    )
+
+                    await message.channel.send(
+                        f"🧪 Ejecutando `{run_id}`..."
+                    )
+
+                    async with message.channel.typing():
+                        result = agent.approve_run(
+                            run_id
+                        )
+
+                    await self.send_long_message(
+                        channel=message.channel,
+                        text=(
+                            f"✅ **Ejecución terminada:**\n"
+                            f"```text\n{result}\n```"
+                        ),
+                    )
+
+                except Exception as error:
+                    await message.channel.send(
+                        "❌ No pude ejecutar la solicitud:\n"
+                        f"`{error}`"
+                    )
+
+                return
+
+            if user_message.lower().startswith("!rechazar-run"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!rechazar-run <id>`"
+                    )
+                    return
+
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene proyecto configurado."
+                    )
+                    return
+
+                run_id = parts[1].strip()
+
+                try:
+                    agent = CodingAgent(
+                        workspace=Path(workspace)
+                    )
+
+                    result = agent.reject_run(
+                        run_id
+                    )
+
+                    await message.channel.send(
+                        f"🗑️ {result}"
+                    )
+
+                except Exception as error:
+                    await message.channel.send(
+                        f"❌ `{error}`"
+                    )
+
+                return
             # Muestra cuántos mensajes hay guardados.
             if user_message.lower() == "!memoria":
                 total = self.memory.count_messages(channel_id)
@@ -433,7 +572,240 @@ class ComputahMindBot:
                     f"`{workspace}`"
                 )
                 return
+            if user_message.lower().startswith("!codigo"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
 
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!codigo <tarea>`"
+                    )
+                    return
+
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene un proyecto configurado.\n"
+                        "Usa primero:\n"
+                        "`!ruta /ruta/al/proyecto`"
+                    )
+                    return
+
+                task = parts[1].strip()
+
+                try:
+                    agent = CodingAgent(
+                        workspace=Path(workspace)
+                    )
+
+                    await message.channel.send(
+                        "🧑‍💻 **Coding Agent iniciado**\n"
+                        f"📁 `{workspace}`\n"
+                        f"🎯 {task}"
+                    )
+
+                    async with message.channel.typing():
+                        answer = await agent.run(
+                            task
+                        )
+
+                    await self.send_long_message(
+                        channel=message.channel,
+                        text=answer,
+                    )
+
+                except Exception as error:
+                    print(
+                        "Error en CodingAgent: "
+                        f"{type(error).__name__}: {error}"
+                    )
+
+                    await message.channel.send(
+                        "❌ El Coding Agent encontró un error:\n"
+                        f"`{error}`"
+                    )
+
+                return
+            if user_message.lower() == "!propuestas":
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene un proyecto configurado."
+                    )
+                    return
+
+                agent = CodingAgent(
+                    workspace=Path(workspace)
+                )
+
+                changes = agent.list_pending_changes()
+
+                if not changes:
+                    await message.channel.send(
+                        "No hay propuestas pendientes."
+                    )
+                    return
+
+                lines = []
+
+                for change in changes:
+                    lines.append(
+                        f"🛠️ `{change.id}`\n"
+                        f"Archivo: `{change.file_path}`\n"
+                        f"{change.description}"
+                    )
+
+                await self.send_long_message(
+                    channel=message.channel,
+                    text=(
+                        "📋 **Propuestas pendientes:**\n\n"
+                        + "\n\n".join(lines)
+                    ),
+                )
+
+                return
+            if user_message.lower().startswith("!diff"):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!diff <id>`"
+                    )
+                    return
+
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene un proyecto configurado."
+                    )
+                    return
+
+                change_id = parts[1].strip()
+
+                try:
+                    agent = CodingAgent(
+                        workspace=Path(workspace)
+                    )
+
+                    diff = agent.get_change_diff(
+                        change_id
+                    )
+
+                    await self.send_long_message(
+                        channel=message.channel,
+                        text=(
+                            f"🧾 **Diff de `{change_id}`:**\n"
+                            f"```diff\n{diff}\n```"
+                        ),
+                    )
+
+                except Exception as error:
+                    await message.channel.send(
+                        f"❌ `{error}`"
+                    )
+
+                return
+            if user_message.lower().startswith("!aprobar "):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!aprobar <id>`"
+                    )
+                    return
+
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene un proyecto configurado."
+                    )
+                    return
+
+                change_id = parts[1].strip()
+
+                try:
+                    agent = CodingAgent(
+                        workspace=Path(workspace)
+                    )
+
+                    result = agent.approve_change(
+                        change_id
+                    )
+
+                    await message.channel.send(
+                        f"✅ {result}"
+                    )
+
+                except Exception as error:
+                    await message.channel.send(
+                        f"❌ `{error}`"
+                    )
+
+                return
+
+            if user_message.lower().startswith("!rechazar "):
+                parts = user_message.split(
+                    maxsplit=1
+                )
+
+                if len(parts) < 2:
+                    await message.channel.send(
+                        "Uso correcto:\n"
+                        "`!rechazar <id>`"
+                    )
+                    return
+
+                workspace = self.memory.get_workspace(
+                    channel_id
+                )
+
+                if not workspace:
+                    await message.channel.send(
+                        "❌ Este canal no tiene un proyecto configurado."
+                    )
+                    return
+
+                change_id = parts[1].strip()
+
+                try:
+                    agent = CodingAgent(
+                        workspace=Path(workspace)
+                    )
+
+                    result = agent.reject_change(
+                        change_id
+                    )
+
+                    await message.channel.send(
+                        f"🗑️ {result}"
+                    )
+
+                except Exception as error:
+                    await message.channel.send(
+                        f"❌ `{error}`"
+                    )
+
+                return
             # Si no hay texto ni adjuntos, no hay nada
             # que procesar.
             if not user_message and not message.attachments:

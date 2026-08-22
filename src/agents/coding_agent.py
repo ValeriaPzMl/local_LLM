@@ -13,7 +13,11 @@ from src.agents.change_request import (
 from src.tools.diff_tools import create_unified_diff
 from src.tools.file_tools import resolve_safe_path
 from src.agents.change_store import ChangeStore
-
+from src.agents.run_request import (
+    RunRequest,
+    create_run_request,
+)
+from src.agents.run_store import RunStore
 
 CODING_SYSTEM_PROMPT = """
 Eres ComputahMind Coding Agent, un agente especializado
@@ -87,6 +91,12 @@ Reglas:
 36. La aprobación solamente es necesaria para APLICAR una propuesta.
 37. Después de usar propose_change, informa el ID de la propuesta
     y espera aprobación.
+38. No ejecutes pruebas ni comandos directamente.
+39. Cuando necesites verificar un cambio, usa propose_run.
+40. propose_run solo crea una solicitud pendiente.
+41. La ejecución real requiere aprobación explícita del usuario.
+42. Después de modificar código, recomienda una verificación
+    adecuada cuando sea útil.
 """.strip()
 
 
@@ -120,7 +130,9 @@ class CodingAgent:
         self.change_store = ChangeStore(
             "data/memory.db"
         )
-
+        self.run_store = RunStore(
+            "data/memory.db"
+        )
         self.timeout = aiohttp.ClientTimeout(
             total=300
         )
@@ -284,6 +296,31 @@ class CodingAgent:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "propose_run",
+                    "description": (
+                        "Propone ejecutar una prueba o verificación. "
+                        "No ejecuta nada sin aprobación."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                            },
+                            "description": {
+                                "type": "string",
+                            },
+                        },
+                        "required": [
+                            "command",
+                            "description",
+                        ],
+                    },
+                },
+            },
         ]
 
     async def _chat(
@@ -371,6 +408,7 @@ class CodingAgent:
 
         virtual_tools = {
             "propose_change",
+            "propose_run",
         }
 
         if (
@@ -624,6 +662,104 @@ class CodingAgent:
 
         return (
             f"Propuesta {change_id} rechazada."
+        )
+    def create_pending_run(
+        self,
+        command: str,
+        description: str,
+    ) -> RunRequest:
+        run = create_run_request(
+            command=command,
+            description=description,
+        )
+
+        self.run_store.save(
+            self.workspace,
+            run,
+        )
+
+        return run
+
+
+    def approve_run(
+        self,
+        run_id: str,
+    ) -> str:
+        run = self.run_store.get(
+            run_id
+        )
+
+        if run is None:
+            raise ValueError(
+                f"No existe la ejecución {run_id}."
+            )
+
+        if run.rejected:
+            raise ValueError(
+                "La ejecución fue rechazada."
+            )
+
+        if run.executed:
+            return run.result or "Ya fue ejecutada."
+
+        tool = self.tools.get(
+            "run_tests"
+        )
+
+        if tool is None:
+            raise RuntimeError(
+                "run_tests no está registrado."
+            )
+
+        result = tool.function(
+            self.workspace,
+            command=run.command,
+        )
+
+        run.approved = True
+        run.executed = True
+        run.result = result
+
+        self.run_store.save(
+            self.workspace,
+            run,
+        )
+
+        return result
+    def reject_run(
+        self,
+        run_id: str,
+    ) -> str:
+        run = self.run_store.get(
+            run_id
+        )
+
+        if run is None:
+            raise ValueError(
+                f"No existe la ejecución {run_id}."
+            )
+
+        if run.executed:
+            raise ValueError(
+                "No puedes rechazar una ejecución "
+                "que ya fue realizada."
+            )
+
+        run.rejected = True
+
+        self.run_store.save(
+            self.workspace,
+            run,
+        )
+
+        return (
+            f"Ejecución {run_id} rechazada."
+        )
+    def list_pending_runs(
+        self,
+    ) -> list[RunRequest]:
+        return self.run_store.list_pending(
+            workspace=self.workspace
         )
     async def run(
         self,
@@ -951,6 +1087,41 @@ class CodingAgent:
                         "content": str(result),
                     }
                 )
+                if tool_name == "propose_run":
+                    try:
+                        command = arguments["command"]
+                        description = arguments["description"]
+
+                        run = self.create_pending_run(
+                            command=command,
+                            description=description,
+                        )
+
+                        successful_tools.append(
+                            "propose_run"
+                        )
+
+                        result = (
+                            "EJECUCIÓN PROPUESTA\n"
+                            f"ID: {run.id}\n"
+                            f"Comando: {run.command}\n"
+                            f"Descripción: {run.description}"
+                        )
+
+                    except Exception as error:
+                        result = (
+                            f"Error creando ejecución: {error}"
+                        )
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_name": tool_name,
+                            "content": result,
+                        }
+                    )
+
+                    continue
                 if tool_name == "git_status":
                     messages.append(
                         {

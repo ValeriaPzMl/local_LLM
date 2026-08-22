@@ -17,6 +17,7 @@ from src.tools.git_tools import (
     git_diff,
     git_status,
 )
+from src.tools.test_tools import run_tests
 
 
 @dataclass
@@ -93,6 +94,14 @@ class ToolRegistry:
                 "Requiere aprobación explícita del usuario."
             ),
             function=write_file,
+        )
+        self.register(
+            name="run_tests",
+            description=(
+                "Ejecuta pruebas o verificaciones permitidas "
+                "dentro del workspace. Requiere aprobación."
+            ),
+            function=run_tests,
         )
 
     def register(
