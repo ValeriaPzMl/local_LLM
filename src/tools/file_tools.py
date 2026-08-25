@@ -275,3 +275,68 @@ def write_file(
         f"Archivo actualizado correctamente: "
         f"{relative_path}"
     )
+def read_file_lines(
+    workspace: Path,
+    relative_path: str,
+    start_line: int,
+    end_line: int,
+) -> str:
+    target = resolve_safe_path(
+        workspace,
+        relative_path,
+    )
+
+    if not target.exists():
+        raise WorkspaceError(
+            f"No existe el archivo: {relative_path}"
+        )
+
+    if not target.is_file():
+        raise WorkspaceError(
+            f"La ruta no es un archivo: {relative_path}"
+        )
+
+    if start_line < 1:
+        raise WorkspaceError(
+            "start_line debe ser mayor o igual a 1."
+        )
+
+    if end_line < start_line:
+        raise WorkspaceError(
+            "end_line debe ser mayor o igual a start_line."
+        )
+
+    # Evitamos que el modelo solicite miles de líneas.
+    max_lines = 250
+
+    if end_line - start_line + 1 > max_lines:
+        end_line = start_line + max_lines - 1
+
+    content = target.read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    lines = content.splitlines()
+
+    if start_line > len(lines):
+        raise WorkspaceError(
+            f"El archivo solo tiene {len(lines)} líneas."
+        )
+
+    end_line = min(
+        end_line,
+        len(lines),
+    )
+
+    selected = lines[
+        start_line - 1:end_line
+    ]
+
+    return "\n".join(
+        f"{number:4}: {line}"
+        for number, line in enumerate(
+            selected,
+            start=start_line,
+        )
+    )

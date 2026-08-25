@@ -97,6 +97,22 @@ Reglas:
 41. La ejecución real requiere aprobación explícita del usuario.
 42. Después de modificar código, recomienda una verificación
     adecuada cuando sea útil.
+43. Para cambios pequeños o medianos en archivos existentes,
+    prefiere propose_patch sobre propose_change.
+44. Antes de usar propose_patch debes haber leído el código
+    relevante mediante read_file o read_file_lines.
+45. old_text debe coincidir exactamente con el contenido real
+    del archivo.
+46. No inventes old_text.
+47. Usa propose_change solamente cuando necesites reemplazar
+    prácticamente todo el archivo o crear una reestructuración grande.
+48. Cuando conozcas la zona concreta del archivo, prefiere
+    read_file_lines para reducir el contexto utilizado.
+49. Si el usuario pide modificar solamente una función, método,
+    bloque o sección concreta de un archivo existente, debes usar
+    propose_patch y NO propose_change.
+50. propose_change se reserva para archivos nuevos, reestructuraciones
+    grandes o reemplazos casi completos del archivo.
 """.strip()
 
 
@@ -321,6 +337,86 @@ class CodingAgent:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file_lines",
+                    "description": (
+                        "Lee solamente un rango de líneas de un archivo. "
+                        "Prefiere esta herramienta sobre read_file cuando "
+                        "ya sabes dónde se encuentra el código relevante."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "relative_path": {
+                                "type": "string",
+                                "description": (
+                                    "Ruta relativa del archivo."
+                                ),
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": (
+                                    "Primera línea a leer, empezando en 1."
+                                ),
+                            },
+                            "end_line": {
+                                "type": "integer",
+                                "description": (
+                                    "Última línea a leer."
+                                ),
+                            },
+                        },
+                        "required": [
+                            "relative_path",
+                            "start_line",
+                            "end_line",
+                        ],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "propose_patch",
+                    "description": (
+                        "Propone reemplazar una sección concreta de un archivo. "
+                        "No modifica el archivo. Prefiere esta herramienta sobre "
+                        "propose_change para cambios pequeños o medianos."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                            },
+                            "old_text": {
+                                "type": "string",
+                                "description": (
+                                    "Texto exacto actualmente existente "
+                                    "que debe reemplazarse."
+                                ),
+                            },
+                            "new_text": {
+                                "type": "string",
+                                "description": (
+                                    "Texto que reemplazará old_text."
+                                ),
+                            },
+                            "description": {
+                                "type": "string",
+                            },
+                        },
+                        "required": [
+                            "file_path",
+                            "old_text",
+                            "new_text",
+                            "description",
+                        ],
+                    },
+                },
+            },
         ]
 
     async def _chat(
@@ -408,6 +504,7 @@ class CodingAgent:
 
         virtual_tools = {
             "propose_change",
+            "propose_patch",
             "propose_run",
         }
 
@@ -535,6 +632,30 @@ class CodingAgent:
         return any(
             keyword in task_lower
             for keyword in change_keywords
+        )
+    def _prefers_patch(
+        self,
+        task: str,
+    ) -> bool:
+        task_lower = task.lower()
+
+        patch_keywords = {
+            "únicamente",
+            "unicamente",
+            "solo",
+            "solamente",
+            "función",
+            "funcion",
+            "método",
+            "metodo",
+            "bloque",
+            "sección",
+            "seccion",
+        }
+
+        return any(
+            keyword in task_lower
+            for keyword in patch_keywords
         )
     def create_pending_change(
         self,
@@ -761,9 +882,124 @@ class CodingAgent:
         return self.run_store.list_pending(
             workspace=self.workspace
         )
+    async def propose_verification(
+        self,
+        change_id: str,
+    ) -> str:
+        change = self.get_pending_change(
+            change_id
+        )
+
+        if change is None:
+            raise ValueError(
+                f"No existe la propuesta {change_id}."
+            )
+
+        if not change.applied:
+            raise ValueError(
+                "El cambio todavía no ha sido aplicado."
+            )
+
+        diff = self.get_change_diff(
+            change_id
+        )
+
+        task = f"""
+    Acaba de aplicarse un cambio de código.
+
+    ARCHIVO MODIFICADO:
+    {change.file_path}
+
+    DESCRIPCIÓN:
+    {change.description}
+
+    DIFF APLICADO:
+    {diff}
+
+    Debes proponer una verificación adecuada para comprobar que
+    el cambio no introdujo errores.
+
+    Reglas:
+
+    - Usa propose_run.
+    - No modifiques ningún archivo.
+    - No ejecutes comandos directamente.
+    - Prefiere una verificación pequeña y específica.
+    - Para Python puedes usar, según corresponda:
+    python -m compileall <archivo>
+    pytest
+    - Si existe una prueba específica relevante, prefiérela sobre
+    ejecutar todo el proyecto.
+    """.strip()
+
+        return await self.run(
+            task=task,
+            force_change_proposal=False,
+            force_run_proposal=True,
+        )
+    async def review_run_result(
+        self,
+        run_id: str,
+    ) -> str:
+        run = self.run_store.get(
+            run_id
+        )
+
+        if run is None:
+            raise ValueError(
+                f"No existe la ejecución {run_id}."
+            )
+
+        if not run.executed:
+            raise ValueError(
+                "La ejecución todavía no ha sido realizada."
+            )
+
+        if not run.result:
+            raise ValueError(
+                "La ejecución no tiene ningún resultado guardado."
+            )
+
+        result = run.result.strip()
+
+        # Si todo salió bien, no gastamos otra llamada al LLM.
+        if result.startswith("Exit code: 0"):
+            return (
+                "✅ La verificación terminó correctamente.\n\n"
+                f"Comando: `{run.command}`\n"
+                "No se detectaron errores."
+            )
+
+        task = f"""
+    Una verificación del proyecto falló.
+
+    COMANDO EJECUTADO:
+    {run.command}
+
+    RESULTADO:
+    {result}
+
+    Analiza este error.
+
+    Debes:
+    1. Identificar la causa probable.
+    2. Inspeccionar los archivos reales del proyecto usando herramientas.
+    3. No inventar implementaciones.
+    4. Si la solución requiere modificar código, crea directamente
+    una propuesta usando propose_change.
+    5. No apliques ningún cambio.
+    6. Explica brevemente el problema y cualquier propuesta creada.
+    """.strip()
+
+        return await self.run(
+            task,
+            force_change_proposal=False,
+        )
     async def run(
         self,
         task: str,
+        force_change_proposal: bool | None = None,
+        force_run_proposal: bool = False,
     ) -> str:
         messages = [
             {
@@ -889,6 +1125,7 @@ class CodingAgent:
 
                 has_read_file = (
                     "read_file" in successful_tools
+                    or "read_file_lines" in successful_tools
                 )
 
                 if requires_inspection and not has_read_file:
@@ -909,12 +1146,28 @@ class CodingAgent:
                     )
 
                     continue
-                requires_change = (
-                    self._requires_change_proposal(task)
+                if force_change_proposal is None:
+                    requires_change = (
+                        self._requires_change_proposal(task)
+                    )
+                else:
+                    requires_change = force_change_proposal
+                    
+                prefers_patch = self._prefers_patch(
+                    task
+                )
+
+                has_patch = (
+                    "propose_patch" in successful_tools
+                )
+
+                has_full_change = (
+                    "propose_change" in successful_tools
                 )
 
                 has_proposed_change = (
                     "propose_change" in successful_tools
+                    or "propose_patch" in successful_tools
                 )
 
                 if requires_change and not has_proposed_change:
@@ -939,10 +1192,34 @@ class CodingAgent:
                     )
 
                     continue
+                has_proposed_run = (
+                    "propose_run" in successful_tools
+                )
+
+                if force_run_proposal and not has_proposed_run:
+                    print(
+                        "[CodingAgent] Respuesta rechazada: "
+                        "falta una propuesta de verificación."
+                    )
+
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "No puedes terminar todavía. "
+                                "Debes crear una propuesta de verificación "
+                                "usando propose_run.\n\n"
+                                "No ejecutes nada. "
+                                "Solo crea la propuesta de ejecución."
+                            ),
+                        }
+                    )
+
+                    continue
                 return self._clean_final_response(
                     content
                 )
-
+            executed_tool_calls = set()
             for tool_call in tool_calls:
                 function_data = tool_call.get(
                     "function",
@@ -959,7 +1236,60 @@ class CodingAgent:
                     "arguments",
                     {},
                 )
+                tool_key = (
+                    tool_name,
+                    json.dumps(
+                        arguments,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    ),
+                )
+
+                if tool_key in executed_tool_calls:
+                    print(
+                        f"[CodingAgent] Tool duplicada ignorada: "
+                        f"{tool_name}"
+                    )
+                    continue
+
+                executed_tool_calls.add(tool_key)
+
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(
+                            arguments
+                        )
+                    except json.JSONDecodeError:
+                        arguments = {}
+
+                print(
+                    f"[CodingAgent] Tool: {tool_name}"
+                )
+
+                print(
+                    f"[CodingAgent] Args: {arguments}"
+                )
                 if tool_name == "propose_change":
+                    # Si la tarea claramente pide tocar solo una parte,
+                    # rechazamos el cambio completo.
+                    if self._prefers_patch(task):
+                        result = (
+                            "Esta tarea requiere una modificación localizada. "
+                            "No uses propose_change. "
+                            "Debes usar propose_patch con old_text exacto "
+                            "y new_text."
+                        )
+
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_name": tool_name,
+                                "content": result,
+                            }
+                        )
+
+                        continue
+
                     try:
                         file_path = arguments[
                             "file_path"
@@ -973,11 +1303,15 @@ class CodingAgent:
                             "new_content"
                         ]
 
-                        # Leemos el archivo real nosotros mismos.
                         target = resolve_safe_path(
                             self.workspace,
                             file_path,
                         )
+
+                        if not target.exists():
+                            raise ValueError(
+                                f"No existe el archivo {file_path}."
+                            )
 
                         original_content = target.read_text(
                             encoding="utf-8",
@@ -990,6 +1324,7 @@ class CodingAgent:
                             new_content=new_content,
                             description=description,
                         )
+
                         created_change_ids.append(
                             change.id
                         )
@@ -1003,7 +1338,7 @@ class CodingAgent:
                         )
 
                         result = (
-                            f"PROPUESTA CREADA\n"
+                            "PROPUESTA CREADA\n"
                             f"ID: {change.id}\n"
                             f"Archivo: {file_path}\n"
                             f"Descripción: {description}\n\n"
@@ -1013,6 +1348,107 @@ class CodingAgent:
                     except Exception as error:
                         result = (
                             "Error creando propuesta: "
+                            f"{error}"
+                        )
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_name": tool_name,
+                            "content": result,
+                        }
+                    )
+
+                    continue
+                if tool_name == "propose_patch":
+                    try:
+                        file_path = arguments[
+                            "file_path"
+                        ]
+
+                        old_text = arguments[
+                            "old_text"
+                        ]
+
+                        new_text = arguments[
+                            "new_text"
+                        ]
+
+                        description = arguments[
+                            "description"
+                        ]
+
+                        target = resolve_safe_path(
+                            self.workspace,
+                            file_path,
+                        )
+
+                        if not target.exists():
+                            raise ValueError(
+                                f"No existe el archivo {file_path}."
+                            )
+
+                        original_content = target.read_text(
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+
+                        occurrence_count = (
+                            original_content.count(
+                                old_text
+                            )
+                        )
+
+                        if occurrence_count == 0:
+                            raise ValueError(
+                                "El texto original propuesto no existe "
+                                "exactamente en el archivo."
+                            )
+
+                        if occurrence_count > 1:
+                            raise ValueError(
+                                "El texto original aparece varias veces. "
+                                "La propuesta es ambigua; lee más contexto "
+                                "y vuelve a intentarlo."
+                            )
+
+                        new_content = original_content.replace(
+                            old_text,
+                            new_text,
+                            1,
+                        )
+
+                        change = self.create_pending_change(
+                            file_path=file_path,
+                            original_content=original_content,
+                            new_content=new_content,
+                            description=description,
+                        )
+
+                        created_change_ids.append(
+                            change.id
+                        )
+
+
+                        successful_tools.append(
+                            "propose_patch"
+                        )
+
+                        diff = self.get_change_diff(
+                            change.id
+                        )
+
+                        result = (
+                            "PATCH PROPUESTO\n"
+                            f"ID: {change.id}\n"
+                            f"Archivo: {file_path}\n"
+                            f"Descripción: {description}\n\n"
+                            f"DIFF:\n{diff}"
+                        )
+
+                    except Exception as error:
+                        result = (
+                            "Error creando patch: "
                             f"{error}"
                         )
 
@@ -1089,8 +1525,13 @@ class CodingAgent:
                 )
                 if tool_name == "propose_run":
                     try:
-                        command = arguments["command"]
-                        description = arguments["description"]
+                        command = arguments[
+                            "command"
+                        ]
+
+                        description = arguments[
+                            "description"
+                        ]
 
                         run = self.create_pending_run(
                             command=command,
@@ -1110,7 +1551,8 @@ class CodingAgent:
 
                     except Exception as error:
                         result = (
-                            f"Error creando ejecución: {error}"
+                            "Error creando ejecución: "
+                            f"{error}"
                         )
 
                     messages.append(
@@ -1153,6 +1595,7 @@ class CodingAgent:
             "El agente alcanzó el límite de pasos "
             "sin completar la tarea."
         )
+    
     def _clean_final_response(
         self,
         content: str,
@@ -1171,3 +1614,4 @@ class CodingAgent:
             return data["response"].strip()
 
         return content
+    

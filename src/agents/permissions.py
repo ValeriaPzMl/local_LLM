@@ -14,6 +14,7 @@ TOOL_PERMISSIONS = {
     "search_code": PermissionLevel.READ_ONLY,
     "git_status": PermissionLevel.READ_ONLY,
     "git_diff": PermissionLevel.READ_ONLY,
+    "read_file_lines": PermissionLevel.READ_ONLY,
 
     # Nivel 2: cambios con confirmación
     "write_file": PermissionLevel.CONFIRMATION_REQUIRED,

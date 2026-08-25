@@ -382,7 +382,6 @@ class ComputahMindBot:
                     return
 
                 run_id = parts[1].strip()
-
                 try:
                     agent = CodingAgent(
                         workspace=Path(workspace)
@@ -400,14 +399,33 @@ class ComputahMindBot:
                     await self.send_long_message(
                         channel=message.channel,
                         text=(
-                            f"✅ **Ejecución terminada:**\n"
+                            "📋 **Resultado de la ejecución:**\n"
                             f"```text\n{result}\n```"
                         ),
                     )
 
-                except Exception as error:
                     await message.channel.send(
-                        "❌ No pude ejecutar la solicitud:\n"
+                        "🔍 Analizando el resultado..."
+                    )
+
+                    async with message.channel.typing():
+                        review = await agent.review_run_result(
+                            run_id
+                        )
+
+                    await self.send_long_message(
+                        channel=message.channel,
+                        text=review,
+                    )
+
+                except Exception as error:
+                    print(
+                        "Error ejecutando/verificando run: "
+                        f"{type(error).__name__}: {error}"
+                    )
+
+                    await message.channel.send(
+                        "❌ No pude ejecutar o analizar la solicitud:\n"
                         f"`{error}`"
                     )
 
@@ -754,6 +772,20 @@ class ComputahMindBot:
 
                     await message.channel.send(
                         f"✅ {result}"
+                    )
+
+                    await message.channel.send(
+                        "🧪 Buscando una verificación adecuada..."
+                    )
+
+                    async with message.channel.typing():
+                        verification = await agent.propose_verification(
+                            change_id
+                        )
+
+                    await self.send_long_message(
+                        channel=message.channel,
+                        text=verification,
                     )
 
                 except Exception as error:

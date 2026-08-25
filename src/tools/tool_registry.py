@@ -10,6 +10,7 @@ from src.agents.permissions import (
 from src.tools.file_tools import (
     list_files,
     read_file,
+    read_file_lines,
     search_code,
     write_file,
 )
@@ -18,6 +19,7 @@ from src.tools.git_tools import (
     git_status,
 )
 from src.tools.test_tools import run_tests
+
 
 
 @dataclass
@@ -102,6 +104,14 @@ class ToolRegistry:
                 "dentro del workspace. Requiere aprobación."
             ),
             function=run_tests,
+        )
+        self.register(
+            name="read_file_lines",
+            description=(
+                "Lee un rango específico de líneas de un archivo. "
+                "Argumentos: relative_path, start_line y end_line."
+            ),
+            function=read_file_lines,
         )
 
     def register(
